@@ -1,0 +1,154 @@
+---
+title: "Storm Data Report"
+author: "Yoni W"
+output: html_document
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Abstract
+
+Severe weather refers to any dangerous meteorological phenomena with the potential to cause damage, serious social disruption, or loss of human life. Types of severe weather phenomena vary, depending on the latitude, altitude, topography, and atmospheric conditions.  
+This report objective is to find the type of event (severe weather) which is most harmful with respect to population health and economic impact.  
+According to the [National Oceanic and Atmospheric Administration (NOAA) storm database](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2), Tornado is considered to be the most dangerous storm with respect to human life (both fatalities and injuries).  
+From economical point of view, Flood is considered to be the most damaging severe weather event (Property and Crop damage combined).  
+Preparation, if any, of the authorities should focus on preventing human presence near Tornado storms and enhance protection at Flood-potential areas.
+
+## Data Processing
+### Preliminary process
+preparation of the data must be applied prior to data investigation:  
+1. Reading source CSV file.  
+2. Extracting columns of interest relevant to questions asked.  
+3. Uploading relevant packages and defining number format.  
+
+The R commands executed in this section are as follows:
+
+```{r Process1, message=FALSE}
+#Reading csv file
+  rawcsv<-read.csv("repdata%2Fdata%2FStormData.csv")
+# extracting columns of interest
+  csv<-rawcsv[,c("EVTYPE","FATALITIES","INJURIES","PROPDMG","PROPDMGEXP","CROPDMG","CROPDMGEXP")]
+#uploading relevant packages and defining number format
+  library(dplyr, quietly = TRUE)
+  options("scipen"=10) #Turn off scientific notations
+```
+
+Next step is to add relevant columns to the data-set as first step towards answering the questions:  
+1. PropertyDamage - full number with no suffix such as M (Millions) or K (Thousands).  
+2. CropDamage - full number with no suffix such as M (Millions) or K (Thousands).  
+3. TotalDamage = PropertyDamage + CropDamage.  
+4. Casualties = Fatalities + Injuries.  
+
+Code executed to apply those actions:
+
+```{r Process2}
+#Adding columns to the dataset:
+#PropertyDamage (full number with no suffix such as M/K)
+  csv<-mutate(csv, PropertyDamage=
+               ifelse(grepl("3", csv$PROPDMGEXP, perl=TRUE)|grepl("k", csv$PROPDMGEXP, ignore.case=TRUE, perl=TRUE),csv$PROPDMG*1000,
+               ifelse(grepl("1", csv$PROPDMGEXP, perl=TRUE),csv$PROPDMG*10,
+               ifelse(grepl("2", csv$PROPDMGEXP, perl=TRUE),csv$PROPDMG*100,
+               ifelse(grepl("4", csv$PROPDMGEXP, perl=TRUE),csv$PROPDMG*10000,
+               ifelse(grepl("5", csv$PROPDMGEXP, perl=TRUE),csv$PROPDMG*1e+05,
+               ifelse(grepl("6", csv$PROPDMGEXP, perl=TRUE)|grepl("m", csv$PROPDMGEXP, ignore.case=TRUE, perl=TRUE),csv$PROPDMG*1e+06,
+               ifelse(grepl("7", csv$PROPDMGEXP, perl=TRUE),csv$PROPDMG*1e+07,
+               ifelse(grepl("8", csv$PROPDMGEXP, perl=TRUE),csv$PROPDMG*1e+08,
+               ifelse(grepl("B", csv$PROPDMGEXP, ignore.case=TRUE, perl=TRUE),csv$PROPDMG*1e+09,csv$PROPDMG))))))))))
+
+# CropDamage (full number with no suffix such as M/K)
+  csv<-mutate(csv, CropDamage=
+                            ifelse(grepl("k", csv$CROPDMGEXP, ignore.case=TRUE,  perl=TRUE),csv$CROPDMG*1000,
+                            ifelse(grepl("2", csv$CROPDMGEXP, perl=TRUE),csv$CROPDMG*100,
+                            ifelse(grepl("m", csv$PROPDMGEXP, ignore.case=TRUE, perl=TRUE),csv$CROPDMG*1e+06,
+                            ifelse(grepl("B", csv$CROPDMGEXP, ignore.case=TRUE, perl=TRUE),csv$CROPDMG*1e+09,csv$CROPDMG)))))
+#TotalDamage = PropertyDamage + CropDamage
+  csv<-mutate(csv, TotalDamage=(csv$CropDamage+csv$PropertyDamage)/1000000000)
+#Casualties = Fatalities + Injuries
+  csv<-mutate(csv, Casualties=csv$FATALITIES+csv$INJURIES)
+```
+
+More actions to arrange the data were as follows:  
+1. Event-Type - different coding for the same event type (for example: "TSTM WIND" and "THUNDERSTORM WIND"). The solution was to use appropriate classification based on [Maurucio Linhares' ramblings replacements.csv file](https://mauricio.github.io/2014/12/23/getting-and-clearning-data.html).
+(Total of 187 event-types). The aggregated event types were implemented into a new column.  
+2. Summing all relevant data into one data frame called sumByEve.  
+
+Code executed to apply those actions:
+
+```{r Process3}  
+#Event:
+  #Merging similar EVENT-TYPES (Based on Mauricio Linhares' ramblings replacements.csv file)
+  csv$EVTYPE <- toupper(gsub("^\\s+|\\s+$", "", csv$EVTYPE))
+  replacements <- read.csv("replacements.csv", stringsAsFactors=FALSE)
+  eventFor <- function( evtype ) {
+              replacements[replacements$event == evtype,]$actual
+  }
+  #creating new column in csv which contains aggregated event type (total of 187 event-types)
+  csv$Event <- sapply(csv$EVTYPE, eventFor)
+
+#Summing all relevant data into one data frame called sumByEve
+  sumByEve<-aggregate(list(csv$FATALITIES,csv$INJURIES,csv$PropertyDamage,csv$CropDamage,csv$TotalDamage,csv$Casualties),
+                      by=list(Category=csv$Event), FUN=sum)
+  colnames(sumByEve)<-c("Event","FATALITIES","INJURIES","PropertyDamage","CropDamage","TotalDamage","Casualties")
+```
+
+## Results
+### Fatalities
+The barplot below shows the ten most dangerous storm types which cause human fatalities.  
+The code that was applied to draw this graph is as follows:
+
+```{r fatalities}
+#sum of fatalities by event type
+  fatal<-sumByEve[order(sumByEve$FATALITIES,decreasing=T)[1:10],]
+  par(mar=c(9,4,2,1))
+  bp<-barplot(fatal$FATALITIES, names.arg=fatal$Event, las=2, ylab = "Fatalities",
+              ylim = c(0,6000), main = "Ten most dangerous Event-Types (Fatalities)")
+  text(bp,fatal[,2],labels=round(fatal[,2],0),pos = 3, xpd=NA)
+```
+
+### Injuries
+The barplot below shows the ten most dangerous storm types which cause human injuries.  
+The code that was applied to draw this graph is as follows:
+
+```{r injuries}
+#sum of injuries by event type
+  inju<-sumByEve[order(sumByEve$INJURIES,decreasing=T)[1:10],]
+  par(mar=c(8.5,4,4,1),mgp=c(3,0.5,0))
+  bp<-barplot(inju$INJURIES, names.arg=inju$Event, las=2, ylab = "Injuries",
+              ylim = c(0,92000), main = "Ten most dangerous Event-Types (Injuries)")
+  text(bp,inju[,3],labels=round(inju[,3],0),pos = 3, xpd=NA)
+```
+
+### Total Casualties
+The next figure shows the sum of the human fatalities and injuries and by that, showing the ten most dangerous storm types with respect to human health.
+
+```{r Casualties}
+#sum of Casualties by event type
+  health<-sumByEve[order(sumByEve$Casualties,decreasing=T)[1:10],]
+  par(mar=c(8.5,4,4,1),mgp=c(3,0.5,0))
+  bp<-barplot(health$Casualties, names.arg=health$Event, las=2, ylab = "Casualties",
+              ylim = c(0,100000), main = "Ten most dangerous Event-Types (Casualties)")
+  text(bp,health[,7],labels=round(health[,7],0),pos = 3, xpd=NA)
+```
+
+### Economic Damage
+Storm intensity is not only evaluated by its human life impact but also by its economic destruction. The figure below describes which are the ten most damaging strom types calculated as the sum of property damage and crop damage.  
+
+Code applied to obtain this figure:
+
+```{r economic}
+#sum of economic damage (TotalDamage = PropertyDamage + CropDamage) by event type
+  economi<-sumByEve[order(sumByEve$TotalDamage,decreasing=T)[1:10],]
+  par(mar=c(8.5,4,4,1),mgp=c(3,0.5,0))
+  bp<-barplot(economi$TotalDamage, names.arg=economi$Event, las=2, ylab = "Total Damage (in Billion Dollars)",
+              main = "Ten most costly Event-Types")
+  text(bp,economi[,6],labels=round(economi[,6],0),pos = 3, xpd=NA)
+```
+
+## Conclusion
+According to the analyzed data, Tornado and Flood are the most destructive storm events in respect with human life and economic damage. Possible reason to this result is the frequency of these storms which may occure more often than other storm types.  
+Hence, in order to lower the costly damage, both in human life and property, the authorities should be more prepared to the threat of severe weather, especially Tornados and Floods.
+
+
+
